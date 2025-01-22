@@ -180,6 +180,27 @@
               </valueHelp>
             </properties>
             <children>
+              <leafNode name="encapsulation">
+                <properties>
+                  <help>GRE Encapsulation type</help>
+                  <completionHelp>
+                    <list>gre gretap</list>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>gre</format>
+                    <description>Generic Routing Encapsulation (network layer)</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>gretap</format>
+                    <description>Generic Routing Encapsulation (datalink layer)</description>
+                  </valueHelp>
+                  <constraint>
+                    <regex>(gre|gretap)</regex>
+                  </constraint>
+                  <constraintErrorMessage>Invalid encapsulation, must be one of: gre or gretap</constraintErrorMessage>
+                </properties>
+                <defaultValue>gre</defaultValue>
+              </leafNode>
               #include <include/source-address-ipv4-ipv6.xml.i>
               #include <include/interface/tunnel-remote.xml.i>
               #include <include/kernel-interface-tun.xml.i>

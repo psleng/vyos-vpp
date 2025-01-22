@@ -30,11 +30,26 @@ def show():
 
 
 class GREInterface:
-    def __init__(self, ifname, source_address, remote, kernel_interface: str = ''):
+    # Mapping of encapsulation types https://github.com/FDio/vpp/blob/stable/2406/src/plugins/gre/gre.api#L25-L35
+    ENCAPSULATION_MAP = {
+        "gre": 0,
+        "gretap": 1,
+        "erspan": 2,
+    }
+
+    def __init__(
+        self,
+        ifname,
+        source_address,
+        remote,
+        encapsulation: str = 'gre',
+        kernel_interface: str = '',
+    ):
         self.instance = int(ifname.removeprefix('gre'))
         self.ifname = ifname
         self.src_address = source_address
         self.dst_address = remote
+        self.encapsulation = self.ENCAPSULATION_MAP[encapsulation]
         self.kernel_interface = kernel_interface
         self.vpp = VPPControl()
 
@@ -43,7 +58,7 @@ class GREInterface:
         https://github.com/FDio/vpp/blob/stable/2306/src/plugins/gre/gre.api
         Example:
             from vyos.vpp.interface import GREInterface
-            a = GREInterface(ifname='gre0', source_address='192.0.2.1', remote='203.0.113.25')
+            a = GREInterface(ifname='gre0', source_address='192.0.2.1', remote='203.0.113.25', encapsulation='gre')
             a.add()
         """
         self.vpp.api.gre_tunnel_add_del(
@@ -52,6 +67,7 @@ class GREInterface:
                 'src': self.src_address,
                 'dst': self.dst_address,
                 'instance': self.instance,
+                'type': self.encapsulation,
             },
         )
 
