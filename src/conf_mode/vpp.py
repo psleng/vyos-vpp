@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2023-2024 VyOS Inc.
+# Copyright (C) 2023-2025 VyOS Inc.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,10 +24,10 @@ from pyroute2 import IPRoute
 from vyos import ConfigError
 from vyos import airbag
 from vyos.base import Warning
-from vyos.config import Config
+from vyos.config import Config, config_dict_merge
 from vyos.configdep import set_dependents, call_dependents
 from vyos.configdict import node_changed, leaf_node_changed
-from vyos.utils.cpu import get_core_count
+from vyos.utils.cpu import get_core_count, get_available_cpus
 from vyos.ifconfig import Section
 from vyos.template import render
 from vyos.utils.boot import boot_configuration_complete
@@ -39,7 +39,12 @@ from vyos.vpp import control_host
 from vyos.vpp.config_deps import deps_xconnect_dict
 from vyos.vpp.config_verify import verify_dev_driver
 from vyos.vpp.config_filter import iface_filter_eth
-from vyos.vpp.utils import EthtoolGDrvinfo
+from vyos.vpp.utils import (
+    EthtoolGDrvinfo,
+    human_page_memory_to_bytes,
+    human_memory_to_bytes,
+    bytes_to_human_memory,
+)
 from vyos.vpp.configdb import JSONStorage
 
 airbag.enable()
@@ -68,6 +73,22 @@ override_drivers: dict[str, str] = {
 
 # drivers that does not use PCIe addresses
 not_pci_drv: list[str] = ['hv_netvsc']
+
+# drivers that support interrupt RX mode for DPDK and XDP
+drivers_support_interrupt: dict[str, list] = {
+    'atlantic': ['dpdk', 'xdp'],
+    'bnx2x': ['dpdk'],
+    'e1000': ['dpdk'],
+    'ena': ['dpdk', 'xdp'],
+    'i40e': ['dpdk', 'xdp'],
+    'ice': ['dpdk', 'xdp'],
+    'igb': ['xdp'],
+    'igc': ['dpdk', 'xdp'],
+    'ixgbe': ['dpdk', 'xdp'],
+    'qede': ['dpdk', 'xdp'],
+    'vmxnet3': ['xdp'],
+    'virtio_net': ['xdp'],
+}
 
 
 def get_config(config=None):
@@ -126,8 +147,22 @@ def get_config(config=None):
         get_first_key=True,
         key_mangling=('-', '_'),
         no_tag_node_value_mangle=True,
-        with_recursive_defaults=True,
     )
+
+    # Get default values which we need to conditionally update into the
+    # dictionary retrieved.
+    default_values = conf.get_config_defaults(**config.kwargs, recursive=True)
+
+    # delete "xdp-options" from defaults if driver is DPDK
+    for iface, iface_config in config.get('settings', {}).get('interface', {}).items():
+        if iface_config.get('driver') == 'dpdk':
+            del default_values['settings']['interface'][iface]['xdp_options']
+
+    config = config_dict_merge(default_values, config)
+
+    # Ignore default XML values if config doesn't exists
+    if not conf.exists(base_settings + ['ipsec']):
+        del config['settings']['ipsec']
 
     # add running config
     if effective_config:
@@ -238,18 +273,6 @@ def get_config(config=None):
     return config
 
 
-def convert_to_int(val):
-    rates = {
-        'K': 1024,
-        'M': 1024**2,
-        'G': 1024**3,
-    }
-    try:
-        return int(val)
-    except ValueError:
-        return int(val[:-1]) * rates[val[-1]]
-
-
 def verify_memory(settings):
     memory_available: int = virtual_memory().available
     cpus: int = get_core_count()
@@ -269,12 +292,28 @@ def verify_memory(settings):
     )
     memory_required += netlink_buffer_size
 
-    memory_main_heap = convert_to_int(
+    memory_main_heap = human_memory_to_bytes(
         settings.get('memory', {}).get('main_heap_size', '1G')
     )
-    memory_required += memory_main_heap
 
-    statseg_size = convert_to_int(settings.get('statseg', {}).get('size', '96M'))
+    if memory_main_heap < 51 << 20:
+        # vpp is aborted when we try to use a smaller heap size
+        raise ConfigError('The main heap size must be greater than or equal to 51M')
+
+    memory_main_heap_page_size = human_page_memory_to_bytes(
+        settings.get('memory', {}).get('main_heap_page_size', 'default')
+    )
+
+    if memory_main_heap_page_size > memory_main_heap:
+        raise ConfigError(
+            f'The main heap size must be greater than or equal to page-size({bytes_to_human_memory(memory_main_heap_page_size, "K")})'
+        )
+
+    memory_required += (memory_main_heap + memory_main_heap_page_size - 1) & ~(
+        memory_main_heap_page_size - 1
+    )
+
+    statseg_size = human_memory_to_bytes(settings.get('statseg', {}).get('size', '96M'))
     memory_required += statseg_size
 
     if memory_available < memory_required:
@@ -292,25 +331,6 @@ def verify(config):
 
     if 'settings' not in config:
         raise ConfigError('"settings interface" is required but not set!')
-
-    # CPU main-core must be not included to corelist-workers
-    if config.get('settings').get('cpu', {}).get('main_core') and config.get(
-        'settings'
-    ).get('cpu', {}).get('corelist_workers'):
-        corelist_workers = config['settings']['cpu']['corelist_workers']
-        main_core = int(config['settings']['cpu']['main_core'])
-
-        all_core_numbers = []
-        for worker_range in corelist_workers:
-            core_numbers = worker_range.split('-')
-            all_core_numbers.extend(
-                range(int(core_numbers[0]), int(core_numbers[-1]) + 1)
-            )
-
-        if main_core in all_core_numbers:
-            raise ConfigError(
-                f'"cpu main-core {main_core}" must not be included in the corelist-workers!'
-            )
 
     if 'interface' not in config['settings']:
         raise ConfigError('"settings interface" is required but not set!')
@@ -334,6 +354,26 @@ def verify(config):
         if iface_config['driver'] == 'xdp' and 'xdp_options' in iface_config:
             if iface_config['xdp_options']['num_rx_queues'] != 'all':
                 Warning(f'Not all RX queues will be connected to VPP for {iface}!')
+
+        if iface_config['driver'] == 'xdp' and 'dpdk_options' in iface_config:
+            raise ConfigError('DPDK options are not applicable for XDP driver!')
+
+        if iface_config['driver'] == 'dpdk' and 'xdp_options' in iface_config:
+            raise ConfigError('XDP options are not applicable for DPDK driver!')
+
+        # RX-mode verification
+        rx_mode = iface_config.get('rx_mode')
+        if rx_mode and rx_mode != 'polling':
+            # By default drivers operate in polling mode. Not all NIC drivers support
+            # RX mode interrupt and adaptive
+            driver = config.get('persist_config').get(iface).get('original_driver')
+            if (
+                driver not in drivers_support_interrupt
+                or iface_config['driver'] not in drivers_support_interrupt[driver]
+            ):
+                raise ConfigError(
+                    f'RX mode {rx_mode} is not supported for interface {iface}'
+                )
 
     # check GRE tunnels as part of the bridge, only tunnel-type teb is allowed
     #   set vpp interfaces bridge br1 member interface gre1
@@ -381,11 +421,105 @@ def verify(config):
     if 'cpu' in config['settings']:
         if (
             'corelist_workers' in config['settings']['cpu']
-            and 'main_core' not in config['settings']['cpu']
-        ):
+            or 'workers' in config['settings']['cpu']
+        ) and 'main_core' not in config['settings']['cpu']:
             raise ConfigError('"cpu main-core" is required but not set!')
 
+        if (
+            'corelist_workers' in config['settings']['cpu']
+            and 'workers' in config['settings']['cpu']
+        ):
+            raise ConfigError(
+                '"cpu corelist-workers" and "cpu workers" cannot be used at the same time!'
+            )
+
+        cpus = int(get_core_count())
+        skip_cores = 0
+
+        if 'skip_cores' in config['settings']['cpu']:
+            skip_cores = int(config['settings']['cpu']['skip_cores'])
+            # the number of skipped cores should not be more than all CPUs - 1 (for main core)
+            if skip_cores > cpus - 1:
+                raise ConfigError(
+                    f'The system does not have enough available CPUs to skip '
+                    f'(reduce "cpu skip-cores" to {cpus - 1} or less)'
+                )
+
+        if 'workers' in config['settings']['cpu']:
+            # number of worker threads must be not more than
+            # available CPUs in the system - 1 for main thread - number of skipped cores
+            # or - 1 (at least) for system processes
+            workers = int(config['settings']['cpu']['workers'])
+            available_workers = cpus - 1 - (skip_cores or 1)
+            if workers > available_workers:
+                raise ConfigError(
+                    f'The system does not have enough CPUs for {workers} VPP workers '
+                    f'(reduce to {available_workers} or less)'
+                )
+
+        cpus_available = list(map(lambda el: el['cpu'], get_available_cpus()))
+        # available CPUs are all CPUs without first N skipped cores that will not be used
+        cpus_available = cpus_available[skip_cores:]
+
+        if 'main_core' in config['settings']['cpu']:
+            main_core = int(config['settings']['cpu']['main_core'])
+
+            if main_core not in cpus_available:
+                raise ConfigError(f'"cpu main-core {main_core}" is not available!')
+
+            # CPU main-core must be not included to corelist-workers
+            if config.get('settings').get('cpu', {}).get('corelist_workers'):
+                corelist_workers = config['settings']['cpu']['corelist_workers']
+
+                all_core_numbers = []
+                for worker_range in corelist_workers:
+                    core_numbers = worker_range.split('-')
+                    if int(core_numbers[0]) > int(core_numbers[-1]):
+                        raise ConfigError(
+                            f'Range for "cpu corelist-workers {worker_range}" is not correct'
+                        )
+                    all_core_numbers.extend(
+                        range(int(core_numbers[0]), int(core_numbers[-1]) + 1)
+                    )
+
+                if main_core in all_core_numbers:
+                    raise ConfigError(
+                        f'"cpu main-core {main_core}" must not be included in the corelist-workers!'
+                    )
+
+                if not all(el in cpus_available for el in all_core_numbers):
+                    raise ConfigError('"cpu corelist-workers" is not correct')
+
     verify_memory(config['settings'])
+    if 'host_resources' in config['settings']:
+        if (
+            'nr_hugepages' in config['settings']['host_resources']
+            and 'max_map_count' in config['settings']['host_resources']
+        ):
+            if int(config['settings']['host_resources']['max_map_count']) < 2 * int(
+                config['settings']['host_resources']['nr_hugepages']
+            ):
+                raise ConfigError(
+                    'The max_map_count must be greater than or equal to (2 * nr_hugepages)'
+                )
+
+    if 'statseg' in config['settings']:
+        _size = human_memory_to_bytes(config['settings']['statseg'].get('size', '96M'))
+
+        if 'size' in config['settings']['statseg']:
+            if _size < 1 << 20:
+                raise ConfigError(
+                    'The statseg size must be greater than or equal to 1M'
+                )
+
+        if 'page_size' in config['settings']['statseg']:
+            _page_size = human_page_memory_to_bytes(
+                config['settings']['statseg']['page_size']
+            )
+            if _page_size > _size:
+                raise ConfigError(
+                    f'The statseg size must be greater than or equal to page-size({bytes_to_human_memory(_page_size, "K")})'
+                )
 
     # Check if deleted interfaces are not xconnect memebrs
     for iface_config in config.get('removed_ifaces', []):
@@ -553,7 +687,16 @@ def apply(config):
             if iface not in Section.interfaces():
                 vpp_control.lcp_pair_add(iface, iface)
 
-            # Set rx-mode
+            # For unknown reasons, if multiple interfaces later try to be
+            # initialized by configuration scripts, some of them may stuck
+            # in an endless UP/DOWN loop
+            # We found two workarounds - pause initialization (requires
+            # main code modifications).
+            # And this one
+            dev_index = iproute.link_lookup(ifname=iface)[0]
+            iproute.link('set', index=dev_index, state='up')
+
+            # Set rx-mode. Should be configured after interface state set to UP
             rx_mode = iface_config.get('rx_mode')
             if rx_mode:
                 # to hardware side
@@ -563,15 +706,6 @@ def apply(config):
                     'vpp_name_kernel'
                 )
                 vpp_control.iface_rxmode(lcp_name, rx_mode)
-
-            # For unknown reasons, if multiple interfaces later try to be
-            # initialized by configuration scripts, some of them may stuck
-            # in an endless UP/DOWN loop
-            # We found two workarounds - pause initialization (requires
-            # main code modifications).
-            # And this one
-            dev_index = iproute.link_lookup(ifname=iface)[0]
-            iproute.link('set', index=dev_index, state='up')
 
         # Syncronize routes via LCP
         vpp_control.lcp_resync()

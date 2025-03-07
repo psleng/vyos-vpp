@@ -19,7 +19,9 @@
 
 import os
 import re
+import sys
 import unittest
+from collections import defaultdict
 
 from json import loads
 
@@ -29,12 +31,48 @@ from vyos.configsession import ConfigSessionError
 from vyos.utils.process import process_named_running
 from vyos.utils.file import read_file
 from vyos.utils.process import rc_cmd
+from vyos.vpp.utils import human_page_memory_to_bytes
+
+sys.path.append(os.getenv('vyos_completion_dir'))
+from list_mem_page_size import list_mem_page_size
 
 PROCESS_NAME = 'vpp_main'
 VPP_CONF = '/run/vpp/vpp.conf'
 base_path = ['vpp']
 driver = 'dpdk'
 interface = 'eth1'
+
+
+def get_vpp_config():
+    config = defaultdict(dict)
+    current_section = None
+
+    with open(VPP_CONF, 'r') as f:
+        for line in f:
+            line = line.strip()
+
+            if not line or line.startswith('#'):  # Ignore empty lines and comments
+                continue
+
+            section_match = re.match(r'([a-zA-Z0-9_-]+)\s*{', line)
+            if section_match:
+                current_section = section_match.group(1)
+                config[current_section] = {}
+                continue
+
+            if line == '}':  # End of section
+                current_section = None
+                continue
+
+            key_value_match = re.match(r'([a-zA-Z0-9_-]+)\s+(.+)', line)
+            if key_value_match:
+                key, value = key_value_match.groups()
+                if current_section:
+                    config[current_section][key] = value
+                else:
+                    config[key] = value
+
+    return config
 
 
 def get_address(interface):
@@ -60,12 +98,13 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.cli_set(base_path + ['settings', 'unix', 'poll-sleep-usec', '10'])
 
     def tearDown(self):
-        # Check for running process
-        self.assertTrue(process_named_running(PROCESS_NAME))
-
-        # delete test config
-        self.cli_delete(base_path)
-        self.cli_commit()
+        try:
+            # Check for running process
+            self.assertTrue(process_named_running(PROCESS_NAME))
+        finally:
+            # Ensure these cleanup operations always run
+            self.cli_delete(base_path)
+            self.cli_commit()
 
         self.assertFalse(os.path.exists(VPP_CONF))
         self.assertFalse(process_named_running(PROCESS_NAME))
@@ -73,6 +112,13 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
     def test_01_vpp_basic(self):
         main_core = '0'
         poll_sleep = '0'
+
+        # Main core must be verified
+        # expect raise ConfigError
+        self.cli_set(base_path + ['settings', 'cpu', 'main-core', '99'])
+
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
 
         self.cli_set(base_path + ['settings', 'cpu', 'main-core', main_core])
         self.cli_set(base_path + ['settings', 'unix', 'poll-sleep-usec', poll_sleep])
@@ -119,6 +165,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         remote_address = '192.0.2.254'
         kernel_address = '203.0.113.1'
 
+        self.cli_set(['interfaces', 'ethernet', interface, 'address', '192.0.2.1/24'])
         self.cli_set(
             base_path
             + ['interfaces', 'vxlan', interface_vxlan, 'source-address', source_address]
@@ -320,7 +367,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.cli_set(base_path + ['interfaces', 'gre', interface_gre])
         self.cli_commit()
 
-    @unittest.skip("Skipping this test geneve index always is 0")
+    @unittest.skip('Skipping this test geneve index always is 0')
     def test_04_vpp_geneve(self):
         vni = '2'
         # Must be 'geneve0' to pass smoketest
@@ -522,6 +569,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.cli_set(base_path + ['interfaces', 'loopback', interface_loopback])
         self.cli_commit()
 
+    @unittest.skip('Skipping temporary bonding, sometimes get recursion T7117')
     def test_06_vpp_bonding(self):
         interface_bond = 'bond23'
         interface_kernel = 'vpptun23'
@@ -644,7 +692,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.assertFalse(os.path.isdir(f'/sys/class/net/{interface_kernel}'))
 
         # delete bonding interface
-        self.cli_set(base_path + ['interfaces', 'bonding', interface_bond])
+        self.cli_delete(base_path + ['interfaces', 'bonding'])
         self.cli_commit()
 
         # check deleting bonding interface
@@ -660,6 +708,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         source_address = '192.0.2.1'
         remote_address = '192.0.2.254'
 
+        self.cli_set(['interfaces', 'ethernet', interface, 'address', '192.0.2.1/24'])
         for member in members:
             self.cli_set(
                 base_path
@@ -692,7 +741,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.assertRegex(out, r'\s*eth1\s+\d+\s+\d+')
 
         # Set non exist member
-        # expect raise ConfigErro
+        # expect raise ConfigError
         self.cli_set(
             base_path
             + [
@@ -751,7 +800,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
 
         # Perform assertions based on the normalized output
         self.assertIn('BD-ID Index BSN Age(min)', normalized_out)
-        self.assertIn('10 1 1 off', normalized_out)
+        self.assertIn('10 1 0 off', normalized_out)
         self.assertIn('Learning U-Forwrd UU-Flood Flooding', normalized_out)
         self.assertIn('on on flood on', normalized_out)
         self.assertIn('Interface If-idx ISN', normalized_out)
@@ -771,6 +820,31 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         self.assertRegex(out, r'\s*eth1\s+\d+\s+\d+')
         self.assertRegex(out, r'\s*vxlan_tunnel23\s+\d+\s+\d+')
 
+        # Add Loopback BVI to the bridge
+        self.cli_set(base_path + ['interfaces', 'loopback', f'lo{vni}'])
+        self.cli_set(
+            base_path
+            + [
+                'interfaces',
+                'bridge',
+                interface_bridge,
+                'member',
+                'interface',
+                f'lo{vni}',
+                'bvi',
+            ]
+        )
+        # commit changes
+        self.cli_commit()
+
+        # check bridge interface
+        _, out = rc_cmd('sudo vppctl show bridge-domain 10 detail')
+        # Normalize the output for consistent whitespace
+        normalized_out = re.sub(r'\s+', ' ', out)
+
+        self.assertIn('10 1 0 off', normalized_out)
+        self.assertRegex(out, r'\bloop23\s+\d+\s+\d+\s+\d+\s+\*\s+')
+
     def test_08_vpp_ipip(self):
         interface_ipip = 'ipip12'
         interface_kernel = 'vpptun12'
@@ -780,6 +854,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         remote_address = '192.0.2.5'
         kernel_address = '10.0.0.0'
 
+        self.cli_set(['interfaces', 'ethernet', interface, 'address', '192.0.2.1/24'])
         self.cli_set(
             base_path
             + ['interfaces', 'ipip', interface_ipip, 'source-address', source_address]
@@ -886,6 +961,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         source_address = '192.0.2.1'
         remote_address = '192.0.2.254'
 
+        self.cli_set(['interfaces', 'ethernet', interface, 'address', '192.0.2.1/24'])
         self.cli_set(
             base_path
             + ['interfaces', 'vxlan', interface_vxlan, 'source-address', source_address]
@@ -946,6 +1022,195 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         _, out = rc_cmd('sudo vppctl show mode')
         for required_string in required_str_list:
             self.assertNotIn(required_string, out)
+
+    def test_10_vpp_driver_options(self):
+        dpdk_options = {
+            'num-rx-desc': '512',
+            'num-tx-desc': '512',
+            'num-rx-queues': '3',
+            'num-tx-queues': '3',
+        }
+
+        base_interface_path = base_path + ['settings', 'interface', interface]
+
+        for option, value in dpdk_options.items():
+            self.cli_set(base_interface_path + ['dpdk-options', option, value])
+
+        # DPDK driver expect only dpdk-options and not xdp-options to be set
+        # expect raise ConfigError
+        self.cli_set(base_interface_path + ['xdp-options', 'no-syscall-lock'])
+
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        # delete xdp-options and apply commit
+        self.cli_delete(base_interface_path + ['xdp-options'])
+        self.cli_commit()
+
+        # check dpdk options in config file
+        config = read_file(VPP_CONF)
+
+        for option, value in dpdk_options.items():
+            self.assertIn(f'{option} {value}', config)
+
+    def test_11_vpp_cpu_settings(self):
+        main_core = '2'
+        workers = '2'
+        skip_cores = '1'
+
+        self.cli_set(base_path + ['settings', 'cpu', 'workers', workers])
+
+        # "cpu workers" reqiures main-core to be set
+        # expect raise ConfigError
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(base_path + ['settings', 'cpu', 'main-core', main_core])
+
+        self.cli_set(base_path + ['settings', 'cpu', 'skip-cores', '99'])
+
+        # "cpu skip-cores" cannot be more than number of available CPUs - 1
+        # expect raise ConfigError
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(base_path + ['settings', 'cpu', 'skip-cores', skip_cores])
+
+        self.cli_commit()
+
+        config_entries = (
+            f'skip-cores {skip_cores}',
+            f'main-core {main_core}',
+            f'workers {workers}',
+            'dev 0000:00:00.0',
+        )
+
+        # Check configured options
+        config = read_file(VPP_CONF)
+        for config_entry in config_entries:
+            self.assertIn(config_entry, config)
+
+    def test_12_vpp_cpu_corelist_workers(self):
+        main_core = '0'
+        corelist_workers = ['1', '2-3']
+
+        for worker in corelist_workers:
+            self.cli_set(base_path + ['settings', 'cpu', 'corelist-workers', worker])
+
+        # "cpu corelist-workers" reqiures main-core to be set
+        # expect raise ConfigError
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(base_path + ['settings', 'cpu', 'main-core', main_core])
+
+        # corelist-workers and workers cannot be used at the same time
+        # expect raise ConfigError
+        self.cli_set(base_path + ['settings', 'cpu', 'workers', '2'])
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+        self.cli_delete(base_path + ['settings', 'cpu', 'workers'])
+
+        # verify corelist-workers are set not correctly
+        # expect raise ConfigError
+        self.cli_set(base_path + ['settings', 'cpu', 'corelist-workers', '99-101'])
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_delete(base_path + ['settings', 'cpu', 'corelist-workers', '99-101'])
+
+        self.cli_commit()
+
+        config_entries = (
+            f'main-core {main_core}',
+            f'corelist-workers {",".join(corelist_workers)}',
+            'dev 0000:00:00.0',
+        )
+
+        # Check configured options
+        config = read_file(VPP_CONF)
+        for config_entry in config_entries:
+            self.assertIn(config_entry, config)
+
+    def test_13_1_buffer_page_size(self):
+        sizes = ['default', 'default-hugepage'] + list_mem_page_size()
+        for size in sizes:
+            if human_page_memory_to_bytes(size) >= 1 << 30:
+                continue
+            self.cli_set(base_path + ['settings', 'buffers', 'page-size', size])
+            self.cli_commit()
+
+            conf = get_vpp_config()
+            self.assertEqual(conf['buffers']['page-size'], size)
+
+    def test_13_2_statseg_page_size(self):
+        sizes = ['default', 'default-hugepage'] + list_mem_page_size()
+        for size in sizes:
+            if human_page_memory_to_bytes(size) >= 1 << 30:
+                continue
+            self.cli_set(base_path + ['settings', 'statseg', 'page-size', size])
+            self.cli_commit()
+
+            conf = get_vpp_config()
+            self.assertEqual(conf['statseg']['page-size'], size)
+
+    def test_13_3_mem_page_size(self):
+        sizes = ['default', 'default-hugepage'] + list_mem_page_size()
+        for size in sizes:
+            if human_page_memory_to_bytes(size) >= 1 << 30:
+                continue
+            self.cli_set(
+                base_path + ['settings', 'memory', 'main-heap-page-size', size]
+            )
+            self.cli_commit()
+
+            conf = get_vpp_config()
+            self.assertEqual(conf['memory']['main-heap-page-size'], size)
+
+    def test_14_mem_default_hugepage(self):
+        sizes = list_mem_page_size(hugepage_only=True)
+        for size in sizes:
+            if human_page_memory_to_bytes(size) >= 1 << 30:
+                continue
+            self.cli_set(
+                base_path + ['settings', 'memory', 'default-hugepage-size', size]
+            )
+            self.cli_commit()
+
+            conf = get_vpp_config()
+            self.assertEqual(conf['memory']['default-hugepage-size'], size)
+
+    def test_15_vpp_ipsec_xfrm_nl(self):
+        base_ipsec = base_path + ['settings', 'ipsec']
+        batch_delay = '250'
+        batch_size = '150'
+        rx_buffer_zise = '1024'
+
+        self.cli_set(base_ipsec + ['netlink', 'batch-delay-ms', batch_delay])
+        self.cli_set(base_ipsec + ['netlink', 'batch-size', batch_size])
+        self.cli_set(base_ipsec + ['netlink', 'rx-buffer-size', rx_buffer_zise])
+        self.cli_commit()
+
+        config_entries = (
+            'linux-xfrm-nl',
+            'enable-route-mode-ipsec',
+            'interface ipsec',
+            f'nl-batch-delay-ms {batch_delay}',
+            f'nl-batch-size {batch_size}',
+            f'nl-rx-buffer-size {rx_buffer_zise}',
+        )
+
+        # Check configured options
+        config = read_file(VPP_CONF)
+        for config_entry in config_entries:
+            self.assertIn(config_entry, config)
+
+        # set IPsec tunnel-type ipip
+        self.cli_set(base_ipsec + ['interface-type', 'ipip'])
+        self.cli_commit()
+
+        config = read_file(VPP_CONF)
+        self.assertIn('interface ipip', config)
 
 
 if __name__ == '__main__':

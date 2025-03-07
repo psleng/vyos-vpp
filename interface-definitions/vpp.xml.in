@@ -132,7 +132,7 @@
                   <help>Bridge member interfaces</help>
                 </properties>
                 <children>
-                  <leafNode name="interface">
+                  <tagNode name="interface">
                     <properties>
                       <help>Member interface name</help>
                       <completionHelp>
@@ -142,9 +142,16 @@
                         <format>txt</format>
                         <description>Interface name</description>
                       </valueHelp>
-                      <multi/>
                     </properties>
-                  </leafNode>
+                    <children>
+                      <leafNode name="bvi">
+                        <properties>
+                          <help>Bridge Virtual Interface (BVI)</help>
+                          <valueless/>
+                        </properties>
+                      </leafNode>
+                    </children>
+                  </tagNode>
                 </children>
               </node>
             </children>
@@ -450,8 +457,11 @@
                 <format>ethN</format>
                 <description>Interface name</description>
               </valueHelp>
+              <completionHelp>
+                <script>${vyos_completion_dir}/list_interfaces --type ethernet</script>
+              </completionHelp>
               <constraint>
-                <regex>((eth|lan)[0-9]+|(eno|ens|enp|enx).+)</regex>
+                <validator name="ethernet-interface"/>
               </constraint>
               <constraintErrorMessage>Invalid interface name</constraintErrorMessage>
             </properties>
@@ -608,7 +618,7 @@
               </node>
             </children>
           </tagNode>
-          <node name="ip6">
+          <node name="ipv6">
             <properties>
               <help>IPv6 settings</help>
             </properties>
@@ -633,6 +643,34 @@
                 </properties>
                 <defaultValue>65536</defaultValue>
               </leafNode>
+            </children>
+          </node>
+          <node name="ipsec">
+            <properties>
+              <help>IPsec settings</help>
+            </properties>
+            <children>
+              <leafNode name="interface-type">
+                <properties>
+                  <help>IPsec interface type</help>
+                  <completionHelp>
+                    <list>ipsec ipip</list>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>ipsec</format>
+                    <description>IPsec interface type</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>ipip</format>
+                    <description>IPIP tunnel interface type</description>
+                  </valueHelp>
+                  <constraint>
+                    <regex>(ipsec|ipip)</regex>
+                  </constraint>
+                </properties>
+                <defaultValue>ipsec</defaultValue>
+              </leafNode>
+              #include <include/vpp/netlink.xml.i>
             </children>
           </node>
           <node name="l2learn">
@@ -660,49 +698,7 @@
               <help>Linux control plane setting</help>
             </properties>
             <children>
-              <node name="netlink">
-                <properties>
-                  <help>Netlink options</help>
-                </properties>
-                <children>
-                 <leafNode name="rx-buffer-size">
-                  <properties>
-                    <help>Receive buffer size</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Receive buffer size</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-                <leafNode name="batch-size">
-                  <properties>
-                    <help>Batch size</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Batch size</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-                <leafNode name="batch-delay-ms">
-                  <properties>
-                    <help>Batch delay</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Batch delay (in ms)</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-              </children>
-            </node>
+              #include <include/vpp/netlink.xml.i>
             <leafNode name="ignore-kernel-routes">
               <properties>
                 <help>Ignore kernel routes</help>
@@ -785,7 +781,9 @@
             <leafNode name="default-hugepage-size">
               <properties>
                 <help>Default hugepage size</help>
-                #include <include/unformat_log2_page_size.xml.i>
+                <completionHelp>
+                  <script>sudo ${vyos_completion_dir}/list_mem_page_size.py --hugepage_only True </script>
+                </completionHelp>
               </properties>
             </leafNode>
           </children>
@@ -831,11 +829,11 @@
               <properties>
                 <help>Add a fixed-sleep between main loop poll</help>
                 <valueHelp>
-                  <format>u32:0-4294967295</format>
-                  <description>Number of receive queues</description>
+                  <format>u32:0-500000</format>
+                  <description>Sleep interval in microseconds</description>
                 </valueHelp>
                 <constraint>
-                  <validator name="numeric" argument="--range 0-4294967295"/>
+                  <validator name="numeric" argument="--range 0-500000"/>
                 </constraint>
               </properties>
               <defaultValue>0</defaultValue>
@@ -847,7 +845,7 @@
     <tagNode name="kernel-interfaces" owner="${vyos_conf_scripts_dir}/vpp_kernel-interfaces.py">
       <properties>
         <help>VPP kernel interface settings</help>
-        <priority>305</priority>
+        <priority>308</priority>
         <valueHelp>
           <format>vpptapN</format>
           <description>Kernel interface name</description>
