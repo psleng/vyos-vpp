@@ -16,10 +16,14 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 import ctypes
+import os
 import socket
 from fcntl import ioctl
 from pathlib import Path
 from struct import pack
+
+
+mem_shift = {'K': 10, 'k': 10, 'M': 20, 'm': 20, 'G': 30, 'g': 30}
 
 
 def iftunnel_transform(iface: str) -> str:
@@ -79,6 +83,43 @@ def cli_ifaces_list(config_instance, mode: str = 'candidate') -> list[str]:
             vpp_ifaces.append(iface)
 
     return vpp_ifaces
+
+
+def cli_ethernet_with_vifs_ifaces(config_instance) -> list[str]:
+    """List of all VPP Ethernet interfaces with VIFs
+
+    Args:
+        config_instance (VyOS Config): VyOS Config instance
+
+    Returns:
+        list[str]: list of interfaces
+    """
+    from vyos.configdict import get_interface_dict
+
+    # Read a config
+    config = config_instance.get_config_dict(
+        ['vpp'],
+        key_mangling=('-', '_'),
+        get_first_key=True,
+        no_tag_node_value_mangle=True,
+        with_recursive_defaults=True,
+    )
+
+    ifaces: list[str] = []
+
+    # Get a list of Ethernet interfaces
+    for iface in config.get('settings', {}).get('interface', {}).keys():
+        ifaces.append(iface)
+
+    # Add Ethernet interfaces with VIFs
+    for iface in ifaces:
+        _, iface_config = get_interface_dict(
+            config_instance, ['interfaces', 'ethernet'], ifname=iface
+        )
+        ifaces.extend([f'{iface}.{vif}' for vif in iface_config.get('vif', {})])
+        ifaces.extend([f'{iface}.{vif_s}' for vif_s in iface_config.get('vif_s', {})])
+
+    return ifaces
 
 
 def vpp_ifaces_list(vpp_api) -> list[dict]:
@@ -209,6 +250,96 @@ def cli_ifaces_lcp_kernel_list(
                 )
 
     return lcp_kernel_ifaces
+
+
+def get_default_hugepage_size() -> int:
+    """
+    Retrieve the system's default huge page size.
+    :return: The default huge page size in bytes.
+    """
+    page_size = None
+    try:
+        # default huge page size
+        memfd = os.memfd_create('tmp', os.MFD_HUGETLB)
+        st = os.fstat(memfd)
+        page_size = st.st_blksize
+        os.close(memfd)
+    except OSError:
+        pass
+
+    return page_size
+
+
+def get_default_page_size() -> int:
+    """
+    Retrieve the system's default page size.
+    :return: The default page size in bytes.
+    """
+    return os.sysconf('SC_PAGESIZE')
+
+
+def get_hugepage_sizes() -> list[int]:
+    """
+    Retrieve all available huge page sizes from the system.
+    :return: A list of huge page sizes in bytes.
+    """
+    huge_sizes = []
+    path = '/sys/kernel/mm/hugepages/'
+    try:
+        entries = os.listdir(path)
+        for entry in entries:
+            if entry.startswith('hugepages-'):
+                try:
+                    size_kb = int(entry.replace('hugepages-', '').replace('kB', ''))
+                    huge_sizes.append(size_kb << 10)  # Convert KB to bytes
+                except ValueError:
+                    pass
+    except FileNotFoundError:
+        pass
+
+    return huge_sizes
+
+
+def human_memory_to_bytes(value: str) -> int:
+    """
+    Convert a human-readable vpp memory format (K, M, G) to a byte value.
+
+    :param value: The string memory size in vpp human-readable format.
+    :return: A int representing the value.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        return int(value[:-1]) << mem_shift[value[-1]]
+
+
+def bytes_to_human_memory(value: int, unit: str) -> str | None:
+    """
+    Convert a byte value to a human-readable format (K, M, G).
+
+    :param value: The size in bytes.
+    :param unit: The unit to convert to ('K', 'M', 'G').
+    :return: A string representing the value in the specified unit, or None if zero.
+    """
+    val = value >> mem_shift[unit]
+    return f'{val}{unit}' if val else None
+
+
+def human_page_memory_to_bytes(value: str) -> int:
+    """
+    Convert a human-readable vpp page size format to a byte value.
+
+    :param value: The string memory size in vpp human-readable format.
+    :return: A int representing the value.
+    """
+    default = {
+        'default': get_default_page_size,
+        'default-hugepage': get_default_hugepage_size,
+    }
+    try:
+        return default[value]()
+    except KeyError:
+        return human_memory_to_bytes(value)
 
 
 class EthtoolGDrvinfo:

@@ -14,7 +14,7 @@
         <children>
           <tagNode name="bonding" owner="${vyos_conf_scripts_dir}/vpp_interfaces_bonding.py">
             <properties>
-              <priority>304</priority>
+              <priority>324</priority>
               <help>Bonding Interface/Link Aggregation</help>
               <constraint>
                 <regex>bond[0-9]+</regex>
@@ -112,7 +112,7 @@
           </tagNode>
           <tagNode name="bridge" owner="${vyos_conf_scripts_dir}/vpp_interfaces_bridge.py">
             <properties>
-              <priority>307</priority>
+              <priority>327</priority>
               <help>Bridge domain</help>
               <constraint>
                 <!-- Bridge domain 0 is reserved to vpp default -->
@@ -132,7 +132,7 @@
                   <help>Bridge member interfaces</help>
                 </properties>
                 <children>
-                  <leafNode name="interface">
+                  <tagNode name="interface">
                     <properties>
                       <help>Member interface name</help>
                       <completionHelp>
@@ -142,9 +142,16 @@
                         <format>txt</format>
                         <description>Interface name</description>
                       </valueHelp>
-                      <multi/>
                     </properties>
-                  </leafNode>
+                    <children>
+                      <leafNode name="bvi">
+                        <properties>
+                          <help>Bridge Virtual Interface (BVI)</help>
+                          <valueless/>
+                        </properties>
+                      </leafNode>
+                    </children>
+                  </tagNode>
                 </children>
               </node>
             </children>
@@ -152,7 +159,7 @@
           <!-- Disable as geneve interface index in the VPP always 0 and not configured -->
           <!-- <tagNode name="geneve" owner="${vyos_conf_scripts_dir}/vpp_interfaces_geneve.py">
             <properties>
-              <priority>305</priority>
+              <priority>325</priority>
               <help>Generic Network Virtualization Encapsulation (GENEVE) Interface</help>
               <constraint>
                 <regex>geneve[0-9]+</regex>
@@ -172,7 +179,7 @@
           <!-- </tagNode> -->
           <tagNode name="gre" owner="${vyos_conf_scripts_dir}/vpp_interfaces_gre.py">
             <properties>
-              <priority>305</priority>
+              <priority>325</priority>
               <help>Generic Network Encapsulation (GRE) Interface</help>
               <constraint>
                 <regex>gre[0-9]+</regex>
@@ -239,7 +246,7 @@
           </tagNode>
           <tagNode name="ipip" owner="${vyos_conf_scripts_dir}/vpp_interfaces_ipip.py">
             <properties>
-              <priority>305</priority>
+              <priority>325</priority>
               <help>IP encapsulation tunnel interface</help>
               <constraint>
                 <regex>ipip[0-9]+</regex>
@@ -260,7 +267,7 @@
           </tagNode>
           <tagNode name="loopback" owner="${vyos_conf_scripts_dir}/vpp_interfaces_loopback.py">
             <properties>
-              <priority>305</priority>
+              <priority>325</priority>
               <help>Loopback Interface</help>
               <constraint>
                 <regex>lo[0-9]+</regex>
@@ -279,7 +286,7 @@
           </tagNode>
           <tagNode name="vxlan" owner="${vyos_conf_scripts_dir}/vpp_interfaces_vxlan.py">
             <properties>
-              <priority>305</priority>
+              <priority>325</priority>
               <help>Virtual Extensible LAN (VXLAN) Interface</help>
               <constraint>
                 <regex>vxlan[0-9]+</regex>
@@ -302,7 +309,7 @@
           <tagNode name="xconnect" owner="${vyos_conf_scripts_dir}/vpp_interfaces_xconnect.py">
             <properties>
               <help>Layer 2 cross connect</help>
-              <priority>305</priority>
+              <priority>325</priority>
               <constraint>
                 <regex>xcon[0-9]+</regex>
               </constraint>
@@ -611,7 +618,7 @@
               </node>
             </children>
           </tagNode>
-          <node name="ip6">
+          <node name="ipv6">
             <properties>
               <help>IPv6 settings</help>
             </properties>
@@ -636,6 +643,34 @@
                 </properties>
                 <defaultValue>65536</defaultValue>
               </leafNode>
+            </children>
+          </node>
+          <node name="ipsec">
+            <properties>
+              <help>IPsec settings</help>
+            </properties>
+            <children>
+              <leafNode name="interface-type">
+                <properties>
+                  <help>IPsec interface type</help>
+                  <completionHelp>
+                    <list>ipsec ipip</list>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>ipsec</format>
+                    <description>IPsec interface type</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>ipip</format>
+                    <description>IPIP tunnel interface type</description>
+                  </valueHelp>
+                  <constraint>
+                    <regex>(ipsec|ipip)</regex>
+                  </constraint>
+                </properties>
+                <defaultValue>ipsec</defaultValue>
+              </leafNode>
+              #include <include/vpp/netlink.xml.i>
             </children>
           </node>
           <node name="l2learn">
@@ -663,49 +698,7 @@
               <help>Linux control plane setting</help>
             </properties>
             <children>
-              <node name="netlink">
-                <properties>
-                  <help>Netlink options</help>
-                </properties>
-                <children>
-                 <leafNode name="rx-buffer-size">
-                  <properties>
-                    <help>Receive buffer size</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Receive buffer size</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-                <leafNode name="batch-size">
-                  <properties>
-                    <help>Batch size</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Batch size</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-                <leafNode name="batch-delay-ms">
-                  <properties>
-                    <help>Batch delay</help>
-                    <valueHelp>
-                      <format>u32:0-4294967295</format>
-                      <description>Batch delay (in ms)</description>
-                    </valueHelp>
-                    <constraint>
-                      <validator name="numeric" argument="--range 0-4294967295"/>
-                    </constraint>
-                  </properties>
-                </leafNode>
-              </children>
-            </node>
+              #include <include/vpp/netlink.xml.i>
             <leafNode name="ignore-kernel-routes">
               <properties>
                 <help>Ignore kernel routes</help>
@@ -788,7 +781,9 @@
             <leafNode name="default-hugepage-size">
               <properties>
                 <help>Default hugepage size</help>
-                #include <include/unformat_log2_page_size.xml.i>
+                <completionHelp>
+                  <script>sudo ${vyos_completion_dir}/list_mem_page_size.py --hugepage_only True </script>
+                </completionHelp>
               </properties>
             </leafNode>
           </children>
@@ -834,11 +829,11 @@
               <properties>
                 <help>Add a fixed-sleep between main loop poll</help>
                 <valueHelp>
-                  <format>u32:0-4294967295</format>
-                  <description>Number of receive queues</description>
+                  <format>u32:0-500000</format>
+                  <description>Sleep interval in microseconds</description>
                 </valueHelp>
                 <constraint>
-                  <validator name="numeric" argument="--range 0-4294967295"/>
+                  <validator name="numeric" argument="--range 0-500000"/>
                 </constraint>
               </properties>
               <defaultValue>0</defaultValue>
@@ -847,10 +842,180 @@
         </node>
       </children>
     </node>
+    <node name="nat44">
+      <properties>
+        <help>NAT44</help>
+      </properties>
+      <children>
+        <node name="source" owner="${vyos_conf_scripts_dir}/vpp_nat_source.py">
+          <properties>
+            <help>Source NAT setting</help>
+            <priority>320</priority>
+          </properties>
+          <children>
+            <leafNode name="inbound-interface">
+              <properties>
+                <help>Inbound interface of NAT traffic</help>
+                <completionHelp>
+                  <list>any</list>
+                  <script>${vyos_completion_dir}/list_interfaces</script>
+                </completionHelp>
+              </properties>
+            </leafNode>
+            <leafNode name="outbound-interface">
+              <properties>
+                <help>Outbound interface of NAT traffic</help>
+                <completionHelp>
+                  <list>any</list>
+                  <script>${vyos_completion_dir}/list_interfaces</script>
+                </completionHelp>
+              </properties>
+            </leafNode>
+            <node name="translation">
+              <properties>
+                <help>Outside NAT IP (source NAT only)</help>
+              </properties>
+              <children>
+                <leafNode name="address">
+                  <properties>
+                    <help>IP address, subnet, or range</help>
+                    <completionHelp>
+                      <list>masquerade</list>
+                    </completionHelp>
+                    <valueHelp>
+                      <format>ipv4</format>
+                      <description>IPv4 address to match</description>
+                    </valueHelp>
+                    <valueHelp>
+                      <format>ipv4range</format>
+                      <description>IPv4 address range to match</description>
+                    </valueHelp>
+                    <valueHelp>
+                      <format>masquerade</format>
+                      <description>NAT to the primary address of outbound-interface</description>
+                    </valueHelp>
+                    <constraint>
+                      <validator name="ipv4-address"/>
+                      <validator name="ipv4-range"/>
+                      <regex>(masquerade)</regex>
+                    </constraint>
+                  </properties>
+                </leafNode>
+              </children>
+            </node>
+          </children>
+        </node>
+        <node name="static" owner="${vyos_conf_scripts_dir}/vpp_nat_static.py">
+          <properties>
+            <help>Static NAT settings</help>
+            <priority>321</priority>
+          </properties>
+          <children>
+            <tagNode name="rule">
+              <properties>
+                <help>Rule number for NAT</help>
+                <valueHelp>
+                  <format>u32</format>
+                  <description>Number of NAT rule</description>
+                </valueHelp>
+              </properties>
+              <children>
+                <node name="destination">
+                  <properties>
+                    <help>NAT external parameters</help>
+                  </properties>
+                  <children>
+                    <leafNode name="address">
+                      <properties>
+                        <help>IP address</help>
+                        <valueHelp>
+                          <format>ipv4</format>
+                          <description>IPv4 address</description>
+                        </valueHelp>
+                        <constraint>
+                          <validator name="ipv4-address"/>
+                        </constraint>
+                      </properties>
+                    </leafNode>
+                    #include <include/port-number.xml.i>
+                  </children>
+                </node>
+                <leafNode name="protocol">
+                  <properties>
+                    <help>Protocol to NAT</help>
+                    <completionHelp>
+                      <list>tcp udp icmp all</list>
+                    </completionHelp>
+                    <valueHelp>
+                      <format>all</format>
+                      <description>All protocols (TCP, UDP, and ICMP)</description>
+                    </valueHelp>
+                    <valueHelp>
+                      <format>icmp</format>
+                      <description>Internet control message protocol</description>
+                    </valueHelp>
+                    <valueHelp>
+                      <format>tcp</format>
+                      <description>Transmission control protocol</description>
+                    </valueHelp>
+                    <valueHelp>
+                      <format>udp</format>
+                      <description>user datagram protocol</description>
+                    </valueHelp>
+                    <constraint>
+                      <regex>(tcp|udp|icmp|all)</regex>
+                    </constraint>
+                  </properties>
+                  <defaultValue>all</defaultValue>
+                </leafNode>
+                <leafNode name="outbound-interface">
+                  <properties>
+                    <help>Outbound interface of NAT traffic</help>
+                    <completionHelp>
+                      <list>any</list>
+                      <script>${vyos_completion_dir}/list_interfaces</script>
+                    </completionHelp>
+                  </properties>
+                </leafNode>
+                <leafNode name="inbound-interface">
+                  <properties>
+                    <help>Inbound interface of NAT traffic</help>
+                    <completionHelp>
+                      <list>any</list>
+                      <script>${vyos_completion_dir}/list_interfaces</script>
+                    </completionHelp>
+                  </properties>
+                </leafNode>
+                <node name="translation">
+                  <properties>
+                    <help>NAT internal parameters</help>
+                  </properties>
+                  <children>
+                    <leafNode name="address">
+                      <properties>
+                        <help>IP address</help>
+                        <valueHelp>
+                          <format>ipv4</format>
+                          <description>IPv4 address</description>
+                        </valueHelp>
+                        <constraint>
+                          <validator name="ipv4-address"/>
+                        </constraint>
+                      </properties>
+                    </leafNode>
+                    #include <include/port-number.xml.i>
+                  </children>
+                </node>
+              </children>
+            </tagNode>
+          </children>
+        </node>
+      </children>
+    </node>
     <tagNode name="kernel-interfaces" owner="${vyos_conf_scripts_dir}/vpp_kernel-interfaces.py">
       <properties>
         <help>VPP kernel interface settings</help>
-        <priority>308</priority>
+        <priority>328</priority>
         <valueHelp>
           <format>vpptapN</format>
           <description>Kernel interface name</description>
