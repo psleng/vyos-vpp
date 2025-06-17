@@ -55,6 +55,10 @@ def get_config(config=None) -> dict:
         with_recursive_defaults=True,
     )
 
+    if not conf.exists(['vpp']):
+        config['remove_vpp'] = True
+        return config
+
     # Get effective config as we need full dictionary for deletion
     effective_config = conf.get_config_dict(
         base,
@@ -104,6 +108,14 @@ def get_config(config=None) -> dict:
         }
     )
 
+    if conf.exists(['vpp', 'settings', 'nat44', 'timeout']):
+        timeouts = conf.get_config_dict(
+            ['vpp', 'settings', 'nat44', 'timeout'],
+            key_mangling=('-', '_'),
+            with_defaults=True,
+        )
+        config.update(timeouts)
+
     if effective_config:
         config.update({'effective': effective_config})
 
@@ -131,7 +143,7 @@ def convert_range_to_list_ips(address_range) -> list:
 
 
 def verify(config):
-    if 'remove' in config:
+    if 'remove' in config or 'remove_vpp' in config:
         return None
 
     if 'interface' not in config:
@@ -329,6 +341,9 @@ def generate(config):
 
 
 def apply(config):
+    if 'remove_vpp' in config:
+        return None
+
     n = Nat44()
 
     if 'remove' in config:
@@ -453,6 +468,13 @@ def apply(config):
                 port=int(rule_config.get('local_port', 0)),
                 interface=rule_config.get('external_interface'),
             )
+    if 'timeout' in config:
+        n.set_nat_timeouts(
+            icmp=int(config.get('timeout').get('icmp')),
+            udp=int(config.get('timeout').get('udp')),
+            tcp_established=int(config.get('timeout').get('tcp_established')),
+            tcp_transitory=int(config.get('timeout').get('tcp_transitory')),
+        )
 
 
 if __name__ == '__main__':
