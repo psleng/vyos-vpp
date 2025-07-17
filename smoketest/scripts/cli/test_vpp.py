@@ -1084,14 +1084,24 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
         dpdk_options = {
             'num-rx-desc': '512',
             'num-tx-desc': '512',
-            'num-rx-queues': '3',
-            'num-tx-queues': '3',
+            'num-rx-queues': '1',
+            'num-tx-queues': '1',
         }
+        main_core = '0'
+        workers = '1'
 
         base_interface_path = base_path + ['settings', 'interface', interface]
 
         for option, value in dpdk_options.items():
             self.cli_set(base_interface_path + ['dpdk-options', option, value])
+
+        # rx/tx queue configuration expect VPP workers to be set
+        # expect raise ConfigError
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(base_path + ['settings', 'cpu', 'main-core', main_core])
+        self.cli_set(base_path + ['settings', 'cpu', 'workers', workers])
 
         # DPDK driver expect only dpdk-options and not xdp-options to be set
         # expect raise ConfigError
@@ -1112,7 +1122,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
 
     def test_11_vpp_cpu_settings(self):
         main_core = '2'
-        workers = '2'
+        workers = '1'
         skip_cores = '1'
 
         self.cli_set(base_path + ['settings', 'cpu', 'workers', workers])
@@ -1149,7 +1159,7 @@ class TestVPP(VyOSUnitTestSHIM.TestCase):
 
     def test_12_vpp_cpu_corelist_workers(self):
         main_core = '0'
-        corelist_workers = ['1', '2-3']
+        corelist_workers = ['3']
 
         for worker in corelist_workers:
             self.cli_set(base_path + ['settings', 'cpu', 'corelist-workers', worker])
